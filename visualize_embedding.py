@@ -90,8 +90,8 @@ if __name__=='__main__':
         concoatenated_output = pickle.load(f)
     
     for xcoder in ['enc', 'dec']:
-        for layer_style in ['first', 'last']:
-            for token_style in ['cls', 'last']:
+        for layer_style in ['first', 'last', 'avg', 'avg_last4']:
+            for token_style in ['cls', 'last', 'avg']:
                 enc_hs, enc_label = postprocess_hidden_states(concoatenated_output[xcoder], concoatenated_output['categorys'],
                                                               layer_style=layer_style, token_style=token_style)
                 visualzie_image(enc_hs, enc_label, model_name=args.model_name, xcoder=xcoder, layer_style=layer_style, token_style=token_style)
