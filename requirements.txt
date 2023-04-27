@@ -1,0 +1,10 @@
+--find-links https://download.pytorch.org/whl/torch_stable.html
+torch==2.0.0+cu117
+torchvision==0.15.1+cu117
+scikit-learn==1.1.1
+datasets==2.11.0
+pandas==1.4.3
+numpy==1.23.1
+transformers==4.28.1
+seaborn==0.12.2
+sentencepiece==0.1.98

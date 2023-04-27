@@ -1,0 +1,9 @@
+
+
+# folder
+google/
+hs_output/
+__pycache__/
+t5_image/
+t5_pca_image/
+*venv/
