@@ -7,3 +7,8 @@ __pycache__/
 t5_image/
 t5_pca_image/
 *venv/
+
+
+T5_valid/
+T5_pie*/
+t5_*/
