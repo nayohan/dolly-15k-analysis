@@ -13,7 +13,7 @@ from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 
 from datasets import load_dataset
-from transformers import T5ForConditionalGeneration, T5Tokenizer, DataCollatorWithPadding
+from transformers import AutoModel, AutoTokenizer, DataCollatorWithPadding
 from model.t5_model import CumulativeT5Model
 
 import wandb
@@ -24,21 +24,24 @@ from nltk.tokenize import sent_tokenize
 from accelerate import Accelerator
 from bert_score import score
 
-# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 CFG = {
-    'model_name'    :"google/flan-t5-xl",
-    'dataset_name'  :"databricks/databricks-dolly-15k",
+    'model_name'    :"google/flan-t5-small",
+    'dataset_name'  :"cnn_dailymail",
     
     'train_epoch'   :5,
     'lr'            :1e-6,
-    'batch_size'    :16,
-    'tot_batch_size':16,
+    'batch_size'    :32,
+    'tot_batch_size':32,
     'max_length'    :128,
-    
     'early_stop_cnt':5,
     'seed'          :2023,
+    'load_path'     : "/home/uj-user/Yo/dolly-15k-analysis/model_trained/google_flan-t5-small_b16_epoch5_lr1e-06_e5tl_1.9616_vl1.6817va49.9346_bertsnan.pth"
+    # 'load_path'     : "/home/uj-user/Yo/dolly-15k-analysis/model_trained/google_flan-t5-base_b16_epoch5_lr1e-06_e5tl_1.6965_vl1.4667va52.4566_bertsnan.pth"
+    # 'load_path'     : "/home/uj-user/Yo/dolly-15k-analysis/model_trained/google_flan-t5-large_b16_epoch5_lr1e-06_e4tl_1.4976_vl1.3077va54.8268_bertsnan.pth"
+    # 'load_path'     : "/home/uj-user/Yo/dolly-15k-analysis/model_trained/google_flan-t5-xl_b16_epoch5_lr1e-06_e3tl_1.4530_vl1.2589va56.3379_bertsnan.pth"
 }
 
 def seed_everything(seed):
@@ -54,16 +57,16 @@ seed_everything(CFG['seed']) # Seed 고정
 
 
 # 1. Load dataset
-dataset = load_dataset(CFG['dataset_name'])
-tokenizer = T5Tokenizer.from_pretrained(CFG['model_name'], use_fast=False)
-dataset['train'] = dataset['train'].select(list(range(0,6400)))
-# dataset['validation'] = dataset['validation'].select(list(range(0,640)))
-# dataset['test'] = dataset['test'].select(list(range(0,68)))
+dataset = load_dataset(CFG['dataset_name'], '3.0.0')
+tokenizer = AutoTokenizer.from_pretrained(CFG['model_name'], use_fast=False)
+dataset['train'] = dataset['train'].select(list(range(0,640)))
+dataset['validation'] = dataset['validation'].select(list(range(0,640)))
+dataset['test'] = dataset['test'].select(list(range(0,500)))
 
 
 # 2. Preprocess dataset
 def preprocess_func(example):
-    x_key = ['instruction', 'response'] # rename to dataset column
+    x_key = ['article', 'highlights'] # rename to dataset column
 
     pattern = re.compile(f'[^ .,?!/@$%~％·∼()\x00-\x7Fㄱ-ㅣ가-힣\[\]]+')
     url_pattern = re.compile(r'https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)')
@@ -77,18 +80,18 @@ def preprocess_func(example):
         x = repeat_normalize(x, num_repeats=2)
         example[key] = x
     
-    # del example['id'] # column 삭제
+    del example['id'] # column 삭제
     return example
 
 def tokenizer_func(example):
-    model_inputs = tokenizer(example['instruction'], truncation=True, max_length=CFG['max_length'])
-    labels = tokenizer(text_target=example['response'], truncation=True, max_length=CFG['max_length'])
+    model_inputs = tokenizer(example['article'], truncation=True, max_length=CFG['max_length'])
+    labels = tokenizer(text_target=example['highlights'], truncation=True, max_length=CFG['max_length'])
     model_inputs['labels'] = labels['input_ids']
     return model_inputs
 
 cleaned_dataset = dataset.map(preprocess_func, num_proc=24)
 tokenized_dataset = cleaned_dataset.map(tokenizer_func, num_proc=24, batched=True)
-tokenized_dataset = tokenized_dataset.remove_columns(['instruction', 'response', 'context', 'category'])
+tokenized_dataset = tokenized_dataset.remove_columns(['article', 'highlights'])
 tokenized_dataset.set_format("torch")
 
 print('tokenized_dataset:', tokenized_dataset)
@@ -101,8 +104,8 @@ from transformers import DataCollatorForSeq2Seq
 data_collator =DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model, label_pad_token_id=0)
 
 train_dataloader = DataLoader(tokenized_dataset['train'], batch_size=CFG['batch_size'], shuffle=False, collate_fn=data_collator)
-valid_dataloader = DataLoader(tokenized_dataset['train'], batch_size=CFG['batch_size'], shuffle=False, collate_fn=data_collator)
-test_dataloader = DataLoader(tokenized_dataset['train'], batch_size=64, shuffle=False, collate_fn=data_collator, drop_last=True)
+valid_dataloader = DataLoader(tokenized_dataset['validation'], batch_size=CFG['batch_size'], shuffle=False, collate_fn=data_collator)
+test_dataloader = DataLoader(tokenized_dataset['test'], batch_size=64, shuffle=False, collate_fn=data_collator, drop_last=True)
 
 accelerator = Accelerator(log_with="wandb", gradient_accumulation_steps=int(CFG['tot_batch_size']/CFG['batch_size']))
 accelerator.init_trackers(
@@ -111,8 +114,8 @@ accelerator.init_trackers(
     init_kwargs={
         "wandb": {
             "name": f"{CFG['model_name']}_b{CFG['batch_size']}_e{CFG['train_epoch']}_lr{CFG['lr']}",
-            "notes": f"CFG['dataset_name']",
-            "tags": [CFG['model_name'], CFG['dataset_name'], 'finetuned'],
+            "notes": "cnn daily mail",
+            "tags": [CFG['model_name'], CFG['dataset_name']],
             "entity": "nudago",
         }
     },
@@ -122,6 +125,10 @@ model = model.to(device)
 model, optimizer, train_dataloader, valid_dataloader = accelerator.prepare(model, optimizer, train_dataloader, valid_dataloader)
 # wandb.init(project='t5_sum',tags=['py', CFG['model_name']],)
 # wandb.watch(model)
+import time
+time.sleep(10)
+
+
 
 # 5. Validatoin model
 def postprocess_text(preds, labels):
@@ -142,7 +149,7 @@ def validation(model, dataloader):
     with torch.no_grad():
         for data in tqdm(dataloader):
             data = data.to(device)
-            preds = model.generate(input_ids=data['input_ids'], labels=data['labels'])
+            preds = model(input_ids=data['input_ids'], labels=data['labels'])
             loss = preds.loss#.to(dtype=torch.float32).detach().cpu().numpy()
             valid_loss.append(loss.item())
 
@@ -222,19 +229,20 @@ def test(model, dataloader):
     with torch.no_grad():
         for data in tqdm(dataloader):
             data = data.to(device)
-            # print(data['input_ids'])
-
-            preds = model.generate(input_ids=data['input_ids'],
-                                   attention_mask=data['attention_mask'],
-                                   max_length=CFG['max_length'],
-                                    do_sample=True,
-                                    top_p=0.95,
-                                    top_k=50,
-                                    # num_beams=5,
-                                    # no_repeat_ngram_size=1,
-                                    # early_stopping=True
-                                   )
             
+            preds = model(input_ids=data['input_ids'], labels=data['labels'])
+            preds = torch.argmax(preds.logits, dim=2)#.detach().cpu().numpy()
+            
+            # preds = model.generate(input_ids=data['input_ids'],
+            #                        do_sample=True,
+            #                        max_length=CFG['max_length'],
+            #                        top_p=0.95,
+            #                        top_k=50,
+            #                     #    num_beams=5, 
+            #                     #    length_penalty=1.5,
+            #                     #    no_repeat_ngram_size=3, 
+            #                        early_stopping=True
+            #                        )
             # print(f'preds: {preds.shape}')
             # preds = accelerator.pad_across_processes(preds)
             # print(f'preds: {preds.shape}')
@@ -249,7 +257,6 @@ def test(model, dataloader):
             # print(f'labels: {labels.shape}')
             decoded_inputs = tokenizer.batch_decode(inputs, skip_special_tokens=True)
             decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-            # print(decoded_preds)
             decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
             decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
 
@@ -274,15 +281,17 @@ def test(model, dataloader):
     wandb.log(log_dict)
     return output_text_list, avg_rouge, avg_bert_score
 
+
+
 # 6. Run
 # best_model = train(model, optimizer, train_dataloader, valid_dataloader)
 # accelerator.end_training()
 
+
 # 7. Inference
+ 
 device="cuda"
-# model.load_state_dict(torch.load('/home/uj-user/Yo/dolly-15k-analysis/model_trained/google_flan-t5-small_b64_epoch100_lr1e-06_e26tl_1.7785_vl1.5774va50.2342.pth'))
-# model.load_state_dict(torch.load('/home/uj-user/Yo/dolly-15k-analysis/model_trained/google_flan-t5-base_b16_epoch5_lr1e-06_e5tl_1.6965_vl1.4667va52.4566_bertsnan.pth'))
-# model.load_state_dict(torch.load('/home/uj-user/Yo/dolly-15k-analysis/model_trained/google_flan-t5-large_b8_epoch100_lr1e-06_e6tl_1.5501_vl1.3486va55.1126.pth'))
+model.load_state_dict(torch.load(CFG['load_path']))
 model.to(device)
 output_text_list, avg_rouge, avg_bert_score = test(model, test_dataloader)
 output_df = pd.DataFrame(output_text_list)
