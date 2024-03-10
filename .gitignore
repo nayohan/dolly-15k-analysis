@@ -1,14 +1,19 @@
+*.svg
 
 
-# folder
-google/
-hs_output/
+# google/
+# hs_output/
 __pycache__/
-t5_image/
-t5_pca_image/
+# t5_image/
+# t5_pca_image/
 *venv/
+wandb/
+# model_*/
+
+# T5_valid/
+# T5_pie*/
+# t5_*/
 
 
-T5_valid/
-T5_pie*/
-t5_*/
+# trained_model/
+
